@@ -75,3 +75,11 @@ LAN URL on two phones on the same Wi-Fi, host → invite (QR) → join → play.
 interest management deferred to Alpha (bandwidth is already tiny at this scale);
 mid-round joins are rejected (spectate-on-join is Alpha); host migration and
 reconnection land in Alpha; taunts are optional-only (no forced taunt yet).
+
+## License
+
+HideOut is licensed under the [MIT License](LICENSE).  
+Copyright © 2026 Sumit Gusain.
+
+You are free to use, modify, and distribute this software under the terms of the
+MIT License. See the [LICENSE](LICENSE) file for the full text.

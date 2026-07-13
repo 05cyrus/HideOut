@@ -1,4 +1,8 @@
 /**
+ * HideOut — A 3D multiplayer prop-hunt game
+ * Copyright (c) 2026 Sumit Gusain
+ * Licensed under the MIT License - see LICENSE file for details
+ *
  * Composition root + orchestration. Owns the managers (input, audio, save),
  * the active session, and the render loop; translates session events into UI
  * state (app.*) and audio/FX. Screens call facade methods; they never touch

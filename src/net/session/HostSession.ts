@@ -1,4 +1,8 @@
 /**
+ * HideOut — A 3D multiplayer prop-hunt game
+ * Copyright (c) 2026 Sumit Gusain
+ * Licensed under the MIT License - see LICENSE file for details
+ *
  * Host-side session: owns the authoritative HostSimulation and fans state out.
  *
  * Per fixed tick: queue the host's own input, step the sim, broadcast the sim

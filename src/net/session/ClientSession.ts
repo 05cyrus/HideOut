@@ -1,4 +1,8 @@
 /**
+ * HideOut — A 3D multiplayer prop-hunt game
+ * Copyright (c) 2026 Sumit Gusain
+ * Licensed under the MIT License - see LICENSE file for details
+ *
  * Client-side session: prediction for the local player, interpolation for
  * everyone else, reconciliation against host snapshots.
  *

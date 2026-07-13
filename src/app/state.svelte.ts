@@ -1,4 +1,8 @@
 /**
+ * HideOut — A 3D multiplayer prop-hunt game
+ * Copyright (c) 2026 Sumit Gusain
+ * Licensed under the MIT License - see LICENSE file for details
+ *
  * UI-facing reactive state (Svelte 5 runes). This is a READ MODEL: the
  * GameFacade writes to it from engine/net events; screens only read (and call
  * facade methods to act). Hot game state (positions) never passes through
