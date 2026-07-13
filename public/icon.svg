@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="HideOut">
+  <rect width="512" height="512" rx="96" fill="#0e1116" />
+  <!-- stylized crate the player "hides" as -->
+  <g fill="none" stroke="#4cc38a" stroke-width="18" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="140" y="150" width="232" height="232" rx="16" fill="#12331f" />
+    <path d="M140 232 h232 M140 300 h232 M256 150 v232" />
+  </g>
+  <circle cx="322" cy="266" r="16" fill="#4cc38a" />
+</svg>
