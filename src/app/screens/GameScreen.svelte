@@ -119,7 +119,9 @@
       >
         {app.hud.locked ? 'UNLOCK' : 'LOCK'}
       </button>
-      <button class="action" onpointerdown={press(Buttons.Taunt)}>TAUNT</button>
+      <button class="action" onpointerdown={press(Buttons.Taunt)}>
+        BAIT<small>taunt early</small>
+      </button>
     {/if}
   </div>
 

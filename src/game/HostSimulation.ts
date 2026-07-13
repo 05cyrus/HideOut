@@ -15,6 +15,7 @@
  */
 import { World, type Entity } from '../core/ecs';
 import { mulberry32 } from '../core/math/random';
+import { clamp01 } from '../core/math/scalar';
 import { set as vec3Set } from '../core/math/vec3';
 import { Buttons, GamePhase, PropType } from './types';
 import type { EntityRecord, InputCommand, SimEvent } from './types';
@@ -175,6 +176,10 @@ export class HostSimulation {
     for (const entity of this.players()) {
       this.stepPlayerEntity(entity, dt);
     }
+
+    // Forced taunts fire before the phase timer advances (so they only ever
+    // occur while genuinely in the Hunt, never on the transition tick).
+    if (this._phase === GamePhase.Hunting) this.tickAutoTaunts();
 
     this.tickPhaseTimer();
     if (this._phase === GamePhase.Hunting) this.checkWinConditions();
@@ -403,6 +408,12 @@ export class HostSimulation {
     });
   }
 
+  /**
+   * MANUAL "bait" taunt (button). Voluntary self-reveal used to lure the hunter
+   * into swinging near you (a wrong swing costs them HP). Optional on top of the
+   * forced auto-taunts below — firing it also resets the auto timer so you don't
+   * double-shout immediately after.
+   */
   private tryTaunt(entity: Entity): void {
     const player = this.world.getOrThrow(entity, Player);
     const iq = this.world.getOrThrow(entity, InputQueue);
@@ -412,6 +423,53 @@ export class HostSimulation {
     iq.tauntCooldownTicks = Math.round(
       this.config.props.tauntCooldownSeconds * this.config.tickRate,
     );
+    this.emitTaunt(entity);
+    iq.autoTauntTicks = this.autoTauntIntervalTicks();
+  }
+
+  /**
+   * FORCED taunts — the fairness engine. Every alive hider periodically emits a
+   * positional taunt so a perfectly-locked hider can still be found. The interval
+   * escalates as the hunt clock runs down (spread out early, frequent late) to
+   * push endgames toward resolution instead of stalling.
+   */
+  private tickAutoTaunts(): void {
+    for (const entity of this.players()) {
+      const player = this.world.getOrThrow(entity, Player);
+      if (player.role !== 'hider' || !player.alive) continue;
+      const iq = this.world.getOrThrow(entity, InputQueue);
+      if (--iq.autoTauntTicks > 0) continue;
+      this.emitTaunt(entity);
+      iq.autoTauntTicks = this.autoTauntIntervalTicks();
+    }
+  }
+
+  /** Seed each hider's first forced taunt, staggered so they don't all shout at once. */
+  private initAutoTaunts(): void {
+    const interval = this.autoTauntIntervalTicks();
+    for (const entity of this.players()) {
+      const player = this.world.getOrThrow(entity, Player);
+      const iq = this.world.getOrThrow(entity, InputQueue);
+      // Stagger across 35–100% of the interval; the exact-same tick would reveal
+      // every hider simultaneously and drown the positional cue.
+      iq.autoTauntTicks =
+        player.role === 'hider' ? Math.max(1, Math.round(interval * (0.35 + 0.65 * this.rng()))) : 0;
+    }
+  }
+
+  /** Escalating interval: full at the start of the hunt, shrinking to the floor at the end. */
+  private autoTauntIntervalTicks(): number {
+    const { tickRate } = this.config;
+    const max = this.config.props.tauntIntervalSeconds;
+    const min = this.config.props.tauntMinIntervalSeconds;
+    const huntingTotal = Math.max(1, Math.round(this.config.round.huntingSeconds * tickRate));
+    const fractionRemaining = clamp01(this.phaseTicksLeft / huntingTotal);
+    const seconds = min + (max - min) * fractionRemaining;
+    return Math.max(1, Math.round(seconds * tickRate));
+  }
+
+  private emitTaunt(entity: Entity): void {
+    const player = this.world.getOrThrow(entity, Player);
     const t = this.world.getOrThrow(entity, Transform);
     this.pendingEvents.push({ type: 'taunt', netId: player.netId, x: t.pos.x, z: t.pos.z });
   }
@@ -483,6 +541,7 @@ export class HostSimulation {
     this._phase = phase;
     this.phaseTicksLeft =
       durationSeconds < 0 ? -1 : Math.max(1, Math.round(durationSeconds * this.config.tickRate));
+    if (phase === GamePhase.Hunting) this.initAutoTaunts();
     this.pendingEvents.push({
       type: 'phase',
       phase,

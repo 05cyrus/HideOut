@@ -27,7 +27,12 @@ export interface GameConfig {
     possessRange: number;
     /** Disguise changes allowed per round. */
     maxSwaps: number;
+    /** Cooldown for a MANUAL "bait" taunt (button press). */
     tauntCooldownSeconds: number;
+    /** Forced auto-taunt interval at the START of the hunt (s). */
+    tauntIntervalSeconds: number;
+    /** Forced auto-taunt interval near the END of the hunt (s) — the escalation floor. */
+    tauntMinIntervalSeconds: number;
   };
   round: {
     preparationSeconds: number;
@@ -64,7 +69,9 @@ export const defaultConfig: GameConfig = {
   props: {
     possessRange: 2.5,
     maxSwaps: 3,
-    tauntCooldownSeconds: 10,
+    tauntCooldownSeconds: 8,
+    tauntIntervalSeconds: 30,
+    tauntMinIntervalSeconds: 12,
   },
   round: {
     preparationSeconds: 4,

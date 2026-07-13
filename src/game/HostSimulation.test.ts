@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { HostSimulation } from './HostSimulation';
 import { GamePhase, PropType, Buttons } from './types';
 import type { InputCommand, SimEvent } from './types';
+import { withConfig } from './config';
 import { testBoxMap as testMap, testBoxConfig as cfg } from './maps/testbox';
 
 /** Per-player sequence bookkeeping + convenience input drivers. */
@@ -302,6 +303,106 @@ describe('HostSimulation — taunt & departures', () => {
     const end = events.find((e) => e.type === 'roundEnd');
     expect(end).toBeDefined();
     if (end?.type === 'roundEnd') expect(end.winner).toBe('hunter');
+  });
+});
+
+describe('HostSimulation — forced auto-taunt', () => {
+  // Short, non-escalating interval (min == max == 1s = 10 ticks) for determinism.
+  const autoCfg = withConfig({
+    tickRate: 10,
+    round: {
+      preparationSeconds: 0.1,
+      hidingSeconds: 0.1,
+      huntingSeconds: 10,
+      roundEndSeconds: 0.3,
+      minPlayers: 2,
+    },
+    props: {
+      possessRange: 2.5,
+      maxSwaps: 2,
+      tauntCooldownSeconds: 1,
+      tauntIntervalSeconds: 1,
+      tauntMinIntervalSeconds: 1,
+    },
+  });
+
+  function startAuto(seed = 3): { sim: HostSimulation; hunterId: number; hiderIds: number[] } {
+    const sim = new HostSimulation(testMap, autoCfg, seed);
+    sim.addPlayer(0, 'P0');
+    sim.addPlayer(1, 'P1');
+    sim.addPlayer(2, 'P2');
+    expect(sim.startRound()).toBe(true);
+    const role = sim.step().find((e) => e.type === 'roleAssigned');
+    if (!role || role.type !== 'roleAssigned') throw new Error('no roleAssigned');
+    const hunterId = role.hunterNetId;
+    return { sim, hunterId, hiderIds: [0, 1, 2].filter((id) => id !== hunterId) };
+  }
+
+  function advanceToHunting(sim: HostSimulation): SimEvent[] {
+    const collected: SimEvent[] = [];
+    for (let i = 0; i < 50 && sim.phase !== GamePhase.Hunting; i++) collected.push(...sim.step());
+    expect(sim.phase).toBe(GamePhase.Hunting);
+    return collected;
+  }
+
+  function collectTaunts(sim: HostSimulation, ticks: number): Set<number> {
+    const taunters = new Set<number>();
+    for (let i = 0; i < ticks; i++) {
+      for (const e of sim.step()) if (e.type === 'taunt') taunters.add(e.netId);
+    }
+    return taunters;
+  }
+
+  it('emits no taunts before the Hunt begins', () => {
+    const { sim } = startAuto();
+    const pre = advanceToHunting(sim);
+    expect(pre.some((e) => e.type === 'taunt')).toBe(false);
+  });
+
+  it('every alive hider auto-taunts during the Hunt; the hunter never does', () => {
+    const { sim, hunterId, hiderIds } = startAuto();
+    advanceToHunting(sim);
+    const taunters = collectTaunts(sim, 20);
+    expect(taunters.has(hunterId)).toBe(false);
+    expect([...taunters].sort()).toEqual([...hiderIds].sort());
+  });
+
+  it('stops taunting a hider once eliminated (dead but still present)', () => {
+    const { sim, hunterId, hiderIds } = startAuto();
+    advanceToHunting(sim);
+
+    // Eliminate whichever hider is inside the hunter's attack range.
+    const rec = (id: number) => sim.records().find((r) => r.netId === id)!;
+    const h = rec(hunterId);
+    const near = hiderIds
+      .map((id) => ({ id, r: rec(id) }))
+      .sort(
+        (a, b) => Math.hypot(a.r.x - h.x, a.r.z - h.z) - Math.hypot(b.r.x - h.x, b.r.z - h.z),
+      )[0]!;
+    const yaw = Math.atan2(near.r.x - h.x, near.r.z - h.z);
+    sim.queueInput(hunterId, [
+      { seq: 1000, moveX: 0, moveZ: 0, yaw, pitch: 0, buttons: Buttons.Attack },
+      { seq: 1001, moveX: 0, moveZ: 0, yaw, pitch: 0, buttons: 0 },
+    ]);
+    sim.step();
+    expect(rec(near.id).alive).toBe(false);
+
+    const other = hiderIds.find((id) => id !== near.id)!;
+    const taunters = collectTaunts(sim, 20);
+    expect(taunters.has(near.id)).toBe(false); // eliminated → silent
+    expect(taunters.has(other)).toBe(true); // survivor still shouts
+  });
+
+  it('manual bait taunt still works and resets the auto timer', () => {
+    const { sim, hiderIds } = startAuto();
+    advanceToHunting(sim);
+    const hider = hiderIds[0]!;
+    sim.queueInput(hider, [
+      { seq: 2000, moveX: 0, moveZ: 0, yaw: 0, pitch: 0, buttons: Buttons.Taunt },
+      { seq: 2001, moveX: 0, moveZ: 0, yaw: 0, pitch: 0, buttons: 0 },
+    ]);
+    const events = sim.step();
+    expect(events.some((e) => e.type === 'taunt' && e.netId === hider)).toBe(true);
   });
 });
 

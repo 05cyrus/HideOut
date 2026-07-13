@@ -1,3 +1,9 @@
+/**
+ * HideOut — A 3D multiplayer prop-hunt game
+ * Copyright (c) 2026 Sumit Gusain
+ * Licensed under the MIT License - see LICENSE file for details
+ */
+
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';

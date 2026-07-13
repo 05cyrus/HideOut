@@ -63,7 +63,10 @@ export interface InputQueueData {
   lastProcessedSeq: number;
   /** Previous tick's button bits, for edge detection. */
   lastButtons: number;
+  /** Cooldown for a manual "bait" taunt. */
   tauntCooldownTicks: number;
+  /** Countdown to the next FORCED auto-taunt during the hunt (ticks). */
+  autoTauntTicks: number;
 }
 export const InputQueue = defineComponent<InputQueueData>('InputQueue', () => ({
   queue: [],
@@ -71,4 +74,5 @@ export const InputQueue = defineComponent<InputQueueData>('InputQueue', () => ({
   lastProcessedSeq: -1,
   lastButtons: 0,
   tauntCooldownTicks: 0,
+  autoTauntTicks: 0,
 }));
