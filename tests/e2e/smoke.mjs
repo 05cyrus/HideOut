@@ -70,6 +70,11 @@ try {
   await host.fill('input[placeholder="Player"]', 'Anna');
   await host.click('text=Host Game');
   await host.fill('input[maxlength="24"]', 'Smoke Room');
+  // Optional map override: HIDEOUT_E2E_MAP="Warehouse Depot" npm run e2e
+  if (process.env.HIDEOUT_E2E_MAP) {
+    await host.click(`.map-card:has-text("${process.env.HIDEOUT_E2E_MAP}")`);
+    console.log(`· map selected: ${process.env.HIDEOUT_E2E_MAP}`);
+  }
   await host.click('text=Create Room');
   await host.waitForSelector('text=Invite players');
   console.log('✓ host reached lobby');
@@ -113,7 +118,9 @@ try {
   await host.waitForSelector('text=/HUNTER|HIDER/i', { timeout: 10000 });
   console.log('✓ round started — both tabs render the game screen');
 
-  await host.waitForTimeout(2500); // let a few frames render
+  // Default lands in Preparation (dim overlay). Set HIDEOUT_E2E_SHOT_DELAY_MS
+  // past prep+hiding (e.g. 31000) for clean Hunting-phase visuals.
+  await host.waitForTimeout(Number(process.env.HIDEOUT_E2E_SHOT_DELAY_MS ?? 2500));
   await host.screenshot({ path: `${SHOTS}host-1st.png` });
   await join.screenshot({ path: `${SHOTS}join-1st.png` });
   console.log(`✓ first-person screenshots → ${SHOTS}`);

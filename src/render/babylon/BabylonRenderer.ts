@@ -1,13 +1,20 @@
 /**
+ * HideOut — A 3D multiplayer prop-hunt game
+ * Copyright (c) 2026 Sumit Gusain
+ * Licensed under the MIT License - see LICENSE file for details
+ *
  * Babylon.js implementation of IRenderer: first-person scene, procedural map
- * geometry, prop instances, player avatars with disguise swapping, and an
- * adaptive quality tuner (render-resolution scaling driven by measured FPS).
+ * geometry with PBR materials (all textures generated at init — zero assets),
+ * data-driven map themes (fog, industrial point-light pools, windows, ceiling
+ * trusses, decorations), real-time shadows, ACES tone mapping, prop instances,
+ * player avatars with disguise swapping, and an adaptive quality tuner.
  *
  * Deep imports keep the bundle to what we actually use. Note the side-effect
- * import of `instancedMesh` — it patches `Mesh.createInstance`, which the
- * static prop placement relies on.
+ * imports: `instancedMesh` patches `Mesh.createInstance` (static prop
+ * placement), `shadowGeneratorSceneComponent` registers the shadow pipeline.
  */
 import '@babylonjs/core/Meshes/instancedMesh';
+import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
@@ -15,6 +22,9 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { TargetCamera } from '@babylonjs/core/Cameras/targetCamera';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
+import { PointLight } from '@babylonjs/core/Lights/pointLight';
+import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator';
+import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration';
 import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder';
@@ -23,10 +33,12 @@ import { CreateCapsule } from '@babylonjs/core/Meshes/Builders/capsuleBuilder';
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { PropType, type EntityRecord } from '../../game/types';
-import type { MapDef } from '../../game/maps/types';
+import type { MapDef, SurfaceKind } from '../../game/maps/types';
 import { raycastWalls, type AABB, type CollisionWorld } from '../../game/physics';
 import type { CameraPose, CameraView, IRenderer, QualityPreset } from '../IRenderer';
-import { buildPropTemplates, tint } from './propMeshes';
+import { buildPropTemplates } from './propMeshes';
+import { buildDecorations } from './decorationMeshes';
+import { applyWorldUVs, MaterialLibrary, MAX_LIGHTS } from './materials';
 
 const EYE_HEIGHT = 1.6;
 
@@ -37,6 +49,10 @@ const TP_HEIGHT = 1.1; // above eye height
 const TP_PITCH_BIAS = 0.12; // radians, tilt down toward the player
 const TP_MIN_DISTANCE = 0.8;
 const TP_WALL_MARGIN = 0.3;
+
+/** Texture tiling densities (meters per tile). */
+const FLOOR_TILE = 4;
+const WALL_TILE = 3;
 
 const PLAYER_PALETTE = [
   new Color3(0.9, 0.49, 0.13),
@@ -60,10 +76,21 @@ interface Avatar {
   disguiseType: PropType;
 }
 
+/** Four wall slabs just outside the bounds (render + TP-camera blocking). */
+function perimeterRims(b: AABB, t = 0.4): AABB[] {
+  return [
+    { minX: b.minX - t, minZ: b.minZ - t, maxX: b.maxX + t, maxZ: b.minZ },
+    { minX: b.minX - t, minZ: b.maxZ, maxX: b.maxX + t, maxZ: b.maxZ + t },
+    { minX: b.minX - t, minZ: b.minZ, maxX: b.minX, maxZ: b.maxZ },
+    { minX: b.maxX, minZ: b.minZ, maxX: b.maxX + t, maxZ: b.maxZ },
+  ];
+}
+
 export class BabylonRenderer implements IRenderer {
   private engine: Engine | null = null;
   private scene: Scene | null = null;
   private camera: TargetCamera | null = null;
+  private mats: MaterialLibrary | null = null;
   private templates: Map<PropType, Mesh> = new Map();
   private avatars = new Map<number, Avatar>();
   private localNetId = -1;
@@ -73,10 +100,19 @@ export class BabylonRenderer implements IRenderer {
   private autoFrames = 0;
   private cameraView: CameraView = 'first';
   private collision: CollisionWorld | null = null;
+  private shadows: ShadowGenerator | null = null;
+  private sun: DirectionalLight | null = null;
+  private fixtureLights: PointLight[] = [];
 
   async init(canvas: HTMLCanvasElement, map: MapDef, localNetId: number): Promise<void> {
     this.localNetId = localNetId;
-    this.collision = { bounds: map.bounds, colliders: map.colliders };
+    // The third-person camera raycasts this world; include the perimeter rims so
+    // the follow camera can never back out through the outer walls (the sim
+    // handles the perimeter via bounds-clamping instead, so rims are render-only).
+    this.collision = {
+      bounds: map.bounds,
+      colliders: [...map.colliders, ...perimeterRims(map.bounds)],
+    };
     const engine = new Engine(canvas, true, {
       powerPreference: 'high-performance',
       stencil: false,
@@ -85,14 +121,57 @@ export class BabylonRenderer implements IRenderer {
 
     const scene = new Scene(engine);
     this.scene = scene;
-    scene.clearColor = new Color4(0.05, 0.07, 0.1, 1);
+    this.mats = new MaterialLibrary(scene);
+    const theme = map.theme;
+
+    const clear = theme?.clearColor ?? [0.05, 0.07, 0.1];
+    scene.clearColor = new Color4(clear[0], clear[1], clear[2], 1);
     scene.ambientColor = new Color3(0.3, 0.3, 0.35);
 
+    // Filmic response scene-wide (applies to Standard AND PBR materials).
+    const ip = scene.imageProcessingConfiguration;
+    ip.toneMappingEnabled = true;
+    ip.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
+    ip.exposure = 1.15;
+    ip.contrast = 1.15;
+    ip.vignetteEnabled = true;
+    ip.vignetteWeight = 1.4;
+
+    if (theme?.fogDensity) {
+      scene.fogMode = Scene.FOGMODE_EXP2;
+      scene.fogDensity = theme.fogDensity;
+      const fc = theme.fogColor ?? clear;
+      scene.fogColor = new Color3(fc[0], fc[1], fc[2]);
+    }
+
+    // ── Lights ──
     const hemi = new HemisphericLight('hemi', new Vector3(0.2, 1, 0.1), scene);
-    hemi.intensity = 0.85;
+    hemi.intensity = theme?.ambientIntensity ?? 0.7;
     hemi.groundColor = new Color3(0.25, 0.24, 0.28);
-    const dir = new DirectionalLight('dir', new Vector3(-0.4, -1, 0.35), scene);
-    dir.intensity = 0.5;
+
+    const sd = theme?.sunDirection ?? [-0.4, -1, 0.35];
+    const sunDir = new Vector3(sd[0], sd[1], sd[2]).normalize();
+    const sun = new DirectionalLight('sun', sunDir, scene);
+    sun.intensity = theme?.sunIntensity ?? 1.5;
+    sun.position = sunDir.scale(-60);
+    this.sun = sun;
+
+    // One shadow map, driven by the key light. Poisson sampling stays WebGL1-safe
+    // (headless SwiftShader in e2e), soft enough for the industrial look.
+    const shadows = new ShadowGenerator(1024, sun);
+    shadows.usePoissonSampling = true;
+    shadows.bias = 0.001;
+    this.shadows = shadows;
+
+    for (const pl of theme?.pointLights ?? []) {
+      const light = new PointLight(`fixture-${this.fixtureLights.length}`, new Vector3(pl.x, pl.y, pl.z), scene);
+      light.intensity = pl.intensity;
+      if (pl.range !== undefined) light.range = pl.range;
+      const c = pl.color ?? [1, 0.9, 0.75];
+      light.diffuse = new Color3(c[0], c[1], c[2]);
+      light.shadowEnabled = false; // only the key light casts
+      this.fixtureLights.push(light);
+    }
 
     this.camera = new TargetCamera('fp', new Vector3(0, EYE_HEIGHT, 0), scene);
     this.camera.minZ = 0.05;
@@ -100,9 +179,10 @@ export class BabylonRenderer implements IRenderer {
     scene.activeCamera = this.camera;
 
     this.buildEnvironment(scene, map);
-    this.templates = buildPropTemplates(scene);
+    this.templates = buildPropTemplates(scene, this.mats);
     this.placeStaticProps(map);
     this.buildAttackFlash(scene);
+    this.applyPresetEffects();
   }
 
   // ── Per-frame API ────────────────────────────────────────────────────────
@@ -135,6 +215,8 @@ export class BabylonRenderer implements IRenderer {
     // Remove avatars for players that vanished from the views (left the game).
     for (const [netId, avatar] of this.avatars) {
       if (!seen.has(netId)) {
+        this.shadows?.removeShadowCaster(avatar.capsule);
+        if (avatar.disguise) this.shadows?.removeShadowCaster(avatar.disguise);
         avatar.root.dispose();
         this.avatars.delete(netId);
       }
@@ -186,6 +268,7 @@ export class BabylonRenderer implements IRenderer {
     if (!this.engine) return;
     const scale = preset === 'high' ? 1 : preset === 'medium' ? 1.35 : preset === 'low' ? 1.75 : 1;
     this.engine.setHardwareScalingLevel(scale);
+    this.applyPresetEffects();
   }
 
   fps(): number {
@@ -197,6 +280,10 @@ export class BabylonRenderer implements IRenderer {
     this.engine?.dispose();
     this.scene = null;
     this.engine = null;
+    this.mats = null;
+    this.shadows = null;
+    this.sun = null;
+    this.fixtureLights = [];
     this.avatars.clear();
     this.templates.clear();
   }
@@ -204,6 +291,8 @@ export class BabylonRenderer implements IRenderer {
   // ── Scene construction ───────────────────────────────────────────────────
 
   private buildEnvironment(scene: Scene, map: MapDef): void {
+    const mats = this.mats!;
+    const theme = map.theme;
     const width = map.bounds.maxX - map.bounds.minX;
     const depth = map.bounds.maxZ - map.bounds.minZ;
     const cx = (map.bounds.minX + map.bounds.maxX) / 2;
@@ -211,34 +300,80 @@ export class BabylonRenderer implements IRenderer {
 
     const floor = CreateGround('floor', { width, height: depth }, scene);
     floor.position.set(cx, 0, cz);
-    tint(floor, new Color3(0.32, 0.33, 0.36));
-    floor.material = this.sharedMat(scene);
+    applyWorldUVs(floor, FLOOR_TILE);
+    floor.material = mats.surface(theme?.floor ?? 'concrete');
+    floor.receiveShadows = true;
     floor.freezeWorldMatrix();
 
-    const wallColor = new Color3(0.45, 0.44, 0.5);
+    const wallSurface = theme?.walls ?? 'paintedWall';
     const h = map.wallHeight;
 
-    // Interior colliders as solid boxes.
-    map.colliders.forEach((c, i) => this.wallBox(scene, `wall${i}`, c, h, wallColor));
+    // Interior colliders as solid boxes (per-collider height/surface overrides).
+    map.colliders.forEach((c, i) => {
+      this.wallBox(
+        scene,
+        `wall${i}`,
+        c,
+        map.colliderHeights?.[i] ?? h,
+        map.colliderSurfaces?.[i] ?? wallSurface,
+      );
+    });
 
     // Perimeter walls just outside the bounds.
-    const t = 0.4;
     const b = map.bounds;
-    const rims: AABB[] = [
-      { minX: b.minX - t, minZ: b.minZ - t, maxX: b.maxX + t, maxZ: b.minZ },
-      { minX: b.minX - t, minZ: b.maxZ, maxX: b.maxX + t, maxZ: b.maxZ + t },
-      { minX: b.minX - t, minZ: b.minZ, maxX: b.minX, maxZ: b.maxZ },
-      { minX: b.maxX, minZ: b.minZ, maxX: b.maxX + t, maxZ: b.maxZ },
-    ];
-    rims.forEach((c, i) => this.wallBox(scene, `rim${i}`, c, h, wallColor));
+    perimeterRims(b).forEach((c, i) => this.wallBox(scene, `rim${i}`, c, h, wallSurface));
+
+    // Themed maps are fully indoor: ceiling deck + steel trusses close the hall.
+    if (theme) {
+      const ceiling = CreateBox('ceiling', { width, height: 0.3, depth }, scene);
+      ceiling.position.set(cx, h + 0.15, cz);
+      applyWorldUVs(ceiling, FLOOR_TILE);
+      ceiling.material = mats.surface('metal');
+      ceiling.freezeWorldMatrix();
+
+      const trussMat = mats.surface('metal');
+      for (let z = Math.ceil(b.minZ / 8) * 8; z < b.maxZ; z += 8) {
+        const beam = CreateBox(`truss-${z}`, { width, height: 0.4, depth: 0.28 }, scene);
+        beam.position.set(cx, h - 0.2, z);
+        applyWorldUVs(beam, WALL_TILE);
+        beam.material = trussMat;
+        beam.freezeWorldMatrix();
+      }
+
+      for (const w of map.windows ?? []) this.buildWindow(scene, w.x, w.z, w.yaw, w.width, w.sill, w.height);
+
+      const decos = buildDecorations(scene, mats, map.decorations ?? [], h);
+      for (const mesh of decos) {
+        mesh.receiveShadows = true;
+        this.shadows?.addShadowCaster(mesh);
+      }
+    }
   }
 
-  private wallBox(scene: Scene, name: string, c: AABB, height: number, color: Color3): void {
+  private wallBox(scene: Scene, name: string, c: AABB, height: number, surface: SurfaceKind): void {
     const mesh = CreateBox(name, { width: c.maxX - c.minX, height, depth: c.maxZ - c.minZ }, scene);
     mesh.position.set((c.minX + c.maxX) / 2, height / 2, (c.minZ + c.maxZ) / 2);
-    tint(mesh, color);
-    mesh.material = this.sharedMat(scene);
+    applyWorldUVs(mesh, WALL_TILE);
+    mesh.material = this.mats!.surface(surface);
+    mesh.receiveShadows = true;
+    this.shadows?.addShadowCaster(mesh);
     mesh.freezeWorldMatrix();
+  }
+
+  /** Emissive "daylight" pane + dark frame, flush against a wall face. */
+  private buildWindow(scene: Scene, x: number, z: number, yaw: number, width: number, sill: number, height: number): void {
+    const mats = this.mats!;
+    const frame = CreateBox('win-frame', { width: width + 0.24, height: height + 0.24, depth: 0.08 }, scene);
+    frame.position.set(x, sill + height / 2, z);
+    frame.rotation.y = yaw;
+    frame.material = mats.surface('metal');
+    frame.freezeWorldMatrix();
+
+    const pane = CreateBox('win-pane', { width, height, depth: 0.1 }, scene);
+    pane.position.set(x, sill + height / 2, z);
+    pane.rotation.y = yaw;
+    pane.material = mats.glassPane();
+    pane.freezeWorldMatrix();
   }
 
   private placeStaticProps(map: MapDef): void {
@@ -249,17 +384,8 @@ export class BabylonRenderer implements IRenderer {
       instance.position.set(prop.x, 0, prop.z);
       instance.rotation.y = prop.yaw;
       instance.freezeWorldMatrix();
+      this.shadows?.addShadowCaster(instance);
     }
-  }
-
-  private sharedMat(scene: Scene): StandardMaterial {
-    let mat = scene.getMaterialByName('world-shared') as StandardMaterial | null;
-    if (!mat) {
-      mat = new StandardMaterial('world-shared', scene);
-      mat.diffuseColor = Color3.White();
-      mat.specularColor = new Color3(0.03, 0.03, 0.03);
-    }
-    return mat;
   }
 
   private createAvatar(netId: number): Avatar {
@@ -271,11 +397,14 @@ export class BabylonRenderer implements IRenderer {
     const mat = new StandardMaterial(`pmat-${netId}`, scene);
     mat.diffuseColor = PLAYER_PALETTE[netId % PLAYER_PALETTE.length]!;
     mat.specularColor = new Color3(0.1, 0.1, 0.1);
+    mat.maxSimultaneousLights = MAX_LIGHTS;
     capsule.material = mat;
+    this.shadows?.addShadowCaster(capsule);
     return { root, capsule, disguise: null, disguiseType: PropType.None };
   }
 
   private applyDisguise(avatar: Avatar, propType: PropType): void {
+    if (avatar.disguise) this.shadows?.removeShadowCaster(avatar.disguise);
     avatar.disguise?.dispose();
     avatar.disguise = null;
     avatar.disguiseType = propType;
@@ -291,6 +420,7 @@ export class BabylonRenderer implements IRenderer {
     clone.parent = avatar.root;
     clone.position.set(0, 0, 0);
     avatar.disguise = clone;
+    this.shadows?.addShadowCaster(clone);
     avatar.capsule.setEnabled(false);
   }
 
@@ -305,6 +435,16 @@ export class BabylonRenderer implements IRenderer {
     flash.position.set(0.15, -0.12, 0.6);
     flash.setEnabled(false);
     this.attackFlash = flash;
+  }
+
+  // ── Quality ──────────────────────────────────────────────────────────────
+
+  /** 'low' sheds the expensive extras: shadows off, only the nearest fixture
+   * pools stay lit. Resolution scaling is handled in setQuality/autoTune. */
+  private applyPresetEffects(): void {
+    const low = this.preset === 'low';
+    if (this.sun) this.sun.shadowEnabled = !low;
+    this.fixtureLights.forEach((light, i) => light.setEnabled(!low || i < 3));
   }
 
   // ── Adaptive quality (auto preset) ───────────────────────────────────────

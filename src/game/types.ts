@@ -31,6 +31,10 @@ export enum PropType {
   Lamp = 6,
   Shelf = 7,
   TrashCan = 8,
+  CardboardBox = 9,
+  Pallet = 10,
+  Cone = 11,
+  Spool = 12,
 }
 
 /** Input button bitfield. Actions ride the input stream so the host can

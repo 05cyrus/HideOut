@@ -74,6 +74,7 @@ const props: PropPlacement[] = [
   // --- Along the north wall ---
   prop(P.Shelf, 0.0, 10.8, 0),
   prop(P.Shelf, 3.0, 10.8, 0),
+  prop(P.Shelf, 5.5, 10.8, 0), // 3rd shelf — keeps a possessed shelf non-unique
   prop(P.TrashCan, -3.2, 10.5),
   prop(P.Lamp, 8.0, 10.5),
 
@@ -86,6 +87,7 @@ const props: PropPlacement[] = [
 export const warehouseMap: MapDef = {
   id: 'warehouse',
   name: 'Warehouse',
+  description: '36×24 m starter hall — two shelf aisles, tight corners. 2–12 players.',
   bounds: aabb(-18, -12, 18, 12),
   wallHeight: 4,
   colliders: [
@@ -111,13 +113,11 @@ export const warehouseMap: MapDef = {
     { x: -16.5, z: -6, yaw: Math.PI / 2 },
     { x: -15, z: 9, yaw: Math.PI / 2 },
     { x: -15, z: -9, yaw: Math.PI / 2 },
-    { x: -16.5, z: 10.5, yaw: Math.PI / 2 },
+    // NOTE: not (-16.5, 10.5) — that sits on the NW depot stack's west face
+    { x: -17.2, z: 10.5, yaw: Math.PI / 2 },
     { x: -16.5, z: -10.5, yaw: Math.PI / 2 },
     { x: -13, z: 0, yaw: Math.PI / 2 },
     { x: -13, z: 3, yaw: Math.PI / 2 },
   ],
 };
 
-export const maps: Record<string, MapDef> = {
-  [warehouseMap.id]: warehouseMap,
-};

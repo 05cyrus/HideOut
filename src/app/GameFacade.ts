@@ -17,7 +17,7 @@ import { FixedTimestep } from '../core/time';
 import type { Unsubscribe } from '../core/events';
 import { GamePhase, PropType, type SimEvent } from '../game/types';
 import { defaultConfig } from '../game/config';
-import { warehouseMap, maps } from '../game/maps/warehouse';
+import { warehouseMap, maps } from '../game/maps';
 import type { GameSession } from '../net/session/types';
 import { HostSession } from '../net/session/HostSession';
 import { ClientSession } from '../net/session/ClientSession';
@@ -89,12 +89,12 @@ export class GameFacade {
 
   // ── Session lifecycle ─────────────────────────────────────────────────────
 
-  hostGame(roomName: string): void {
+  hostGame(roomName: string, mapId?: string): void {
     this.teardownSession();
     const host = new HostSession({
       roomName: roomName.trim() || 'HideOut Room',
       hostName: this.playerName(),
-      map: warehouseMap,
+      map: (mapId && maps[mapId]) || warehouseMap,
       config: defaultConfig,
     });
     this.session = host;
