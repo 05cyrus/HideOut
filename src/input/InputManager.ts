@@ -37,6 +37,11 @@ export class InputManager {
   pitch = 0;
   sensitivity = 1;
 
+  /** When false, look (mouse/touch drag) is frozen. Used while a hider is locked
+   * in place so their prop can't rotate; movement is frozen separately (speed 0).
+   * Held angles are preserved, so unlocking resumes look with no jump. */
+  lookEnabled = true;
+
   /** Local, NON-networked view toggle (first/third person). Kept off the
    * Buttons/InputCommand path because it changes only local rendering. */
   onViewToggle: (() => void) | null = null;
@@ -201,6 +206,7 @@ export class InputManager {
   }
 
   private applyLook(dyaw: number, dpitch: number): void {
+    if (!this.lookEnabled) return;
     this.yaw += dyaw * this.sensitivity;
     // Keep yaw in [-PI, PI] to match the wire encoding.
     if (this.yaw > Math.PI) this.yaw -= Math.PI * 2;

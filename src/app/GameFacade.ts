@@ -189,6 +189,12 @@ export class GameFacade {
     const session = this.session;
     if (!session) return;
 
+    // Freeze look while the local hider is locked in place — a real static prop
+    // neither moves nor turns. This holds the camera AND the networked yaw steady
+    // (movement is already frozen by resolveSpeed), so the prop stops spinning for
+    // everyone. Unlocking resumes look from the held angle with no jump.
+    this.input.lookEnabled = !(session.localState()?.record.locked ?? false);
+
     const steps = this.fixed.advance(dt);
     for (let i = 0; i < steps; i++) {
       session.submitLocalInput(this.input.sample(this.seq++));
