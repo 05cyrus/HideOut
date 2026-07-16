@@ -3,13 +3,14 @@
  * No accounts, no cloud — everything stays on-device, per the offline design.
  */
 import { openDB, type IDBPDatabase } from 'idb';
-import type { QualityPreset } from '../render/IRenderer';
+import type { CameraView, QualityPreset } from '../render/IRenderer';
 
 export interface Settings {
   playerName: string;
   sensitivity: number;
   quality: QualityPreset;
   volume: number;
+  cameraView: CameraView;
 }
 
 const DEFAULTS: Settings = {
@@ -17,6 +18,7 @@ const DEFAULTS: Settings = {
   sensitivity: 1,
   quality: 'auto',
   volume: 0.8,
+  cameraView: 'first',
 };
 
 const DB_NAME = 'hideout';

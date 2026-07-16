@@ -25,7 +25,7 @@ import type { PeerLink } from '../net/transport/PeerLink';
 import { InputManager } from '../input/InputManager';
 import { AudioManager } from '../audio/AudioManager';
 import { SaveManager } from '../save/SaveManager';
-import type { IRenderer } from '../render/IRenderer';
+import type { CameraView, IRenderer } from '../render/IRenderer';
 import { app } from './state.svelte';
 
 const IDLE_TICK_MS = 1000 / defaultConfig.tickRate;
@@ -44,6 +44,7 @@ export class GameFacade {
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private unsubs: Unsubscribe[] = [];
   private resizeHandler = () => this.renderer?.resize();
+  private cameraView: CameraView = 'first';
 
   // ── Boot ──────────────────────────────────────────────────────────────────
 
@@ -54,8 +55,22 @@ export class GameFacade {
       this.input.sensitivity = app.settings.sensitivity;
       this.audio.setVolume(app.settings.volume);
     } catch {
-      app.settings = { playerName: '', sensitivity: 1, quality: 'auto', volume: 0.8 };
+      app.settings = {
+        playerName: '',
+        sensitivity: 1,
+        quality: 'auto',
+        volume: 0.8,
+        cameraView: 'first',
+      };
     }
+  }
+
+  /** Flip first/third-person (view-only). Persisted so it's remembered next match. */
+  toggleCameraView(): void {
+    this.cameraView = this.cameraView === 'first' ? 'third' : 'first';
+    this.renderer?.setCameraView(this.cameraView);
+    app.cameraView = this.cameraView;
+    void this.updateSettings({ cameraView: this.cameraView });
   }
 
   async updateSettings(patch: Partial<NonNullable<typeof app.settings>>): Promise<void> {
@@ -139,7 +154,11 @@ export class GameFacade {
     const map = maps[this.session.mapId] ?? warehouseMap;
     await this.renderer.init(canvas, map, this.session.localNetId);
     this.renderer.setQuality(app.settings?.quality ?? 'auto');
+    this.cameraView = app.settings?.cameraView ?? 'first';
+    this.renderer.setCameraView(this.cameraView);
+    app.cameraView = this.cameraView;
 
+    this.input.onViewToggle = () => this.toggleCameraView();
     this.input.attach(container);
     window.addEventListener('resize', this.resizeHandler);
 
@@ -159,6 +178,7 @@ export class GameFacade {
     cancelAnimationFrame(this.rafHandle);
     this.rafHandle = 0;
     window.removeEventListener('resize', this.resizeHandler);
+    this.input.onViewToggle = null;
     this.input.detach();
     this.renderer?.dispose();
     this.renderer = null;

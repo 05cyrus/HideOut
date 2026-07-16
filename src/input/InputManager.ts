@@ -37,6 +37,10 @@ export class InputManager {
   pitch = 0;
   sensitivity = 1;
 
+  /** Local, NON-networked view toggle (first/third person). Kept off the
+   * Buttons/InputCommand path because it changes only local rendering. */
+  onViewToggle: (() => void) | null = null;
+
   private keys = new Set<string>();
   private pendingButtons = 0;
   private joystick: JoystickState | null = null;
@@ -79,7 +83,15 @@ export class InputManager {
         if (document.pointerLockElement === element) {
           this.pendingButtons |= Buttons.Attack;
         } else {
-          element.requestPointerLock?.();
+          // requestPointerLock returns a Promise in newer Chrome and can reject
+          // (or throw synchronously) in some contexts — iframes, headless, no user
+          // activation. Swallow it; look still works fine without a lock.
+          try {
+            const req = element.requestPointerLock?.() as unknown as Promise<void> | undefined;
+            req?.catch?.(() => {});
+          } catch {
+            /* pointer lock unavailable */
+          }
         }
         return;
       }
@@ -141,6 +153,9 @@ export class InputManager {
           break;
         case 'KeyT':
           this.pendingButtons |= Buttons.Taunt;
+          break;
+        case 'KeyV':
+          this.onViewToggle?.();
           break;
       }
     });

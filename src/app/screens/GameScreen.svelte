@@ -34,6 +34,16 @@
     };
   }
 
+  // View toggle is a local, non-networked action — call the facade directly
+  // (not through the Buttons/input path). stopPropagation keeps the tap from
+  // reaching the canvas joystick/look handler underneath.
+  function toggleView(ev: Event) {
+    ev.stopPropagation();
+    ev.preventDefault();
+    facade.audio.unlock();
+    facade.toggleCameraView();
+  }
+
   onMount(() => {
     void facade.startMatch(canvas, container);
     return () => facade.stopMatch();
@@ -125,6 +135,10 @@
     {/if}
   </div>
 
+  <button class="view-toggle" onpointerdown={toggleView} title="Switch camera (V)">
+    👁 {app.cameraView === 'first' ? '1st' : '3rd'}
+  </button>
+
   <button class="quit" onclick={() => facade.leaveGame()}>✕</button>
 </main>
 
@@ -143,6 +157,18 @@
     height: 100%;
     display: block;
     outline: none;
+  }
+
+  .view-toggle {
+    position: absolute;
+    top: calc(max(0.5rem, env(safe-area-inset-top)) + 2.7rem);
+    left: 0.75rem;
+    background: rgba(13, 17, 23, 0.75);
+    border: 1px solid #30363d;
+    border-radius: 999px;
+    padding: 0.35rem 0.7rem;
+    color: #c9d1d9;
+    font-size: 0.8rem;
   }
 
   .hud.top {

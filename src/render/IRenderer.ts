@@ -8,6 +8,10 @@ import type { MapDef } from '../game/maps/types';
 
 export type QualityPreset = 'auto' | 'high' | 'medium' | 'low';
 
+/** First-person (eye-level) or third-person (follow) camera. View-only — it has
+ * no effect on simulation, networking, or authority. */
+export type CameraView = 'first' | 'third';
+
 export interface CameraPose {
   x: number;
   z: number;
@@ -19,8 +23,11 @@ export interface IRenderer {
   init(canvas: HTMLCanvasElement, map: MapDef, localNetId: number): Promise<void>;
   /** Upsert every player's visual state for this frame. */
   syncViews(views: readonly EntityRecord[]): void;
-  /** First-person camera pose (predicted local player). */
+  /** Camera pose (predicted local player); positioned per the current view mode. */
   setCamera(pose: CameraPose): void;
+  /** Switch between first- and third-person. Also toggles whether the local
+   * player's own body/disguise is rendered. */
+  setCameraView(view: CameraView): void;
   /** Brief muzzle-flash/swing feedback at the hunter's position. */
   flashAttack(): void;
   render(): void;

@@ -114,9 +114,27 @@ try {
   console.log('✓ round started — both tabs render the game screen');
 
   await host.waitForTimeout(2500); // let a few frames render
-  await host.screenshot({ path: `${SHOTS}host-game.png` });
-  await join.screenshot({ path: `${SHOTS}join-game.png` });
-  console.log(`✓ screenshots → ${SHOTS}`);
+  await host.screenshot({ path: `${SHOTS}host-1st.png` });
+  await join.screenshot({ path: `${SHOTS}join-1st.png` });
+  console.log(`✓ first-person screenshots → ${SHOTS}`);
+
+  // ── Camera toggle: flip both tabs to third-person and verify ──
+  for (const [page, tag] of [
+    [host, 'host'],
+    [join, 'join'],
+  ]) {
+    const btn = page.locator('.view-toggle');
+    const before = (await btn.textContent())?.trim();
+    await btn.click();
+    await page.waitForTimeout(300);
+    const after = (await btn.textContent())?.trim();
+    if (before === after) throw new Error(`[${tag}] view toggle did not change (${before})`);
+    if (!after?.includes('3rd')) throw new Error(`[${tag}] expected 3rd-person, got "${after}"`);
+  }
+  await host.waitForTimeout(1500);
+  await host.screenshot({ path: `${SHOTS}host-3rd.png` });
+  await join.screenshot({ path: `${SHOTS}join-3rd.png` });
+  console.log('✓ camera toggle → third-person verified & screenshotted on both tabs');
 
   // WebGL-fallback warnings are expected in headless; real errors are not.
   const relevant = consoleErrors.filter(

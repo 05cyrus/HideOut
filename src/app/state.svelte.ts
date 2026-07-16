@@ -12,6 +12,7 @@ import type { RosterEntry } from '../net/protocol/events';
 import { GamePhase, type Role } from '../game/types';
 import type { Settings } from '../save/SaveManager';
 import type { Capabilities } from '../platform/capabilities';
+import type { CameraView } from '../render/IRenderer';
 
 export type Screen = 'menu' | 'host' | 'join' | 'lobby' | 'game';
 
@@ -36,6 +37,9 @@ class AppState {
   screen = $state<Screen>('menu');
   capabilities = $state<Capabilities | null>(null);
   settings = $state<Settings | null>(null);
+
+  /** Current camera view (first/third person) — for the in-game VIEW button label. */
+  cameraView = $state<CameraView>('first');
 
   /** Lobby/session */
   roomName = $state('');

@@ -24,11 +24,19 @@ import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { PropType, type EntityRecord } from '../../game/types';
 import type { MapDef } from '../../game/maps/types';
-import type { AABB } from '../../game/physics';
-import type { CameraPose, IRenderer, QualityPreset } from '../IRenderer';
+import { raycastWalls, type AABB, type CollisionWorld } from '../../game/physics';
+import type { CameraPose, CameraView, IRenderer, QualityPreset } from '../IRenderer';
 import { buildPropTemplates, tint } from './propMeshes';
 
 const EYE_HEIGHT = 1.6;
+
+// Third-person follow camera (view-only): sits behind + above the player looking
+// forward with a slight downward tilt, pulled in when a wall is close behind.
+const TP_DISTANCE = 4.2;
+const TP_HEIGHT = 1.1; // above eye height
+const TP_PITCH_BIAS = 0.12; // radians, tilt down toward the player
+const TP_MIN_DISTANCE = 0.8;
+const TP_WALL_MARGIN = 0.3;
 
 const PLAYER_PALETTE = [
   new Color3(0.9, 0.49, 0.13),
@@ -63,9 +71,12 @@ export class BabylonRenderer implements IRenderer {
   private attackFlashUntil = 0;
   private preset: QualityPreset = 'auto';
   private autoFrames = 0;
+  private cameraView: CameraView = 'first';
+  private collision: CollisionWorld | null = null;
 
   async init(canvas: HTMLCanvasElement, map: MapDef, localNetId: number): Promise<void> {
     this.localNetId = localNetId;
+    this.collision = { bounds: map.bounds, colliders: map.colliders };
     const engine = new Engine(canvas, true, {
       powerPreference: 'high-performance',
       stencil: false,
@@ -108,8 +119,9 @@ export class BabylonRenderer implements IRenderer {
         this.avatars.set(view.netId, avatar);
       }
 
-      // First-person: never render the local player's own body.
-      const visible = view.netId !== this.localNetId && view.alive;
+      // The local player's own body is hidden in first-person, shown in third.
+      const isLocal = view.netId === this.localNetId;
+      const visible = view.alive && (!isLocal || this.cameraView === 'third');
       avatar.root.setEnabled(visible);
       if (!visible) continue;
 
@@ -131,8 +143,25 @@ export class BabylonRenderer implements IRenderer {
 
   setCamera(pose: CameraPose): void {
     if (!this.camera) return;
-    this.camera.position.set(pose.x, EYE_HEIGHT, pose.z);
-    this.camera.rotation.set(pose.pitch, pose.yaw, 0);
+    if (this.cameraView === 'third') {
+      const fwdX = Math.sin(pose.yaw);
+      const fwdZ = Math.cos(pose.yaw);
+      let dist = TP_DISTANCE;
+      // Pull the camera in if a wall is close behind, so it never clips through.
+      if (this.collision) {
+        const wall = raycastWalls(pose.x, pose.z, -fwdX, -fwdZ, this.collision);
+        if (wall < dist + TP_WALL_MARGIN) dist = Math.max(TP_MIN_DISTANCE, wall - TP_WALL_MARGIN);
+      }
+      this.camera.position.set(pose.x - fwdX * dist, EYE_HEIGHT + TP_HEIGHT, pose.z - fwdZ * dist);
+      this.camera.rotation.set(pose.pitch + TP_PITCH_BIAS, pose.yaw, 0);
+    } else {
+      this.camera.position.set(pose.x, EYE_HEIGHT, pose.z);
+      this.camera.rotation.set(pose.pitch, pose.yaw, 0);
+    }
+  }
+
+  setCameraView(view: CameraView): void {
+    this.cameraView = view;
   }
 
   flashAttack(): void {
