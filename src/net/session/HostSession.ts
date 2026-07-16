@@ -240,6 +240,12 @@ export class HostSession implements GameSession {
     }
     if (event.type === 'phase' && event.phase === GamePhase.Waiting) {
       this.localSwapsLeft = this.options.config.props.maxSwaps;
+      // The sim clears every player's ready flag when a round returns to the
+      // lobby (clients must re-ready each round). But the host is implicitly
+      // ready — mirroring the constructor — and has no Ready button, so without
+      // re-asserting this the "Start Round" gate would stay disabled forever.
+      this.sim.setReady(this.localNetId, true);
+      this.broadcastRoster();
     }
   }
 

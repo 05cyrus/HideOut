@@ -11,7 +11,11 @@
   let inviteError = $state('');
   let copied = $state(false);
 
-  const allReady = $derived(app.roster.length >= 2 && app.roster.every((r) => r.ready));
+  // The host has no Ready button — clicking "Start Round" IS their readiness.
+  // So the gate is: enough players, and everyone EXCEPT the host is ready.
+  const allReady = $derived(
+    app.roster.length >= 2 && app.roster.every((r) => r.netId === app.localNetId || r.ready),
+  );
 
   function toggleReady(): void {
     facade.audio.unlock();

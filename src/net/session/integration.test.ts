@@ -253,6 +253,27 @@ describe('sessions — round flow', () => {
     const moved = Math.hypot(after.x - before.x, after.z - before.z);
     expect(moved).toBeGreaterThan(0.5); // observed through the interpolator
   });
+
+  it('keeps the host ready after a round so it can start the next one', () => {
+    // Regression: the sim clears every ready flag on returning to the lobby.
+    // The host has no Ready button, so if its flag were not re-asserted the
+    // "Start Round" gate would be permanently disabled after the first round.
+    startRound(rig);
+    toPhase(rig, GamePhase.Waiting);
+
+    const hostReady = (s: GameSession) => s.roster().find((r) => r.netId === 0)?.ready;
+    expect(hostReady(rig.host)).toBe(true);
+    // …and the fresh ready state has propagated to every client's roster.
+    expect(hostReady(rig.c1)).toBe(true);
+    expect(hostReady(rig.c2)).toBe(true);
+
+    // Clients were reset to not-ready; the host re-readies them and starts again.
+    expect(rig.c1.roster().find((r) => r.netId === 1)?.ready).toBe(false);
+    rig.c1.setReady(true);
+    rig.c2.setReady(true);
+    flush(rig);
+    expect(rig.host.startRound()).toBe(true);
+  });
 });
 
 describe('sessions — packet loss resilience', () => {
