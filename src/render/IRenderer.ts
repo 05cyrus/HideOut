@@ -30,6 +30,12 @@ export interface IRenderer {
   setCameraView(view: CameraView): void;
   /** Brief muzzle-flash/swing feedback at the hunter's position. */
   flashAttack(): void;
+  /** Visual "noise" cue at a world position — a hider's taunt made a sound
+   * AROUND here. An expanding ground ring + fading beam so the hunter can
+   * locate the source area with the audio off (the top playtest complaint).
+   * Everyone sees it. Callers should pass a position pre-scattered by
+   * render/tauntScatter.ts, never the hider's exact spot. */
+  pingNoise(x: number, z: number): void;
   render(): void;
   resize(): void;
   setQuality(preset: QualityPreset): void;

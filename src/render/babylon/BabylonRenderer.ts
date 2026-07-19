@@ -31,7 +31,10 @@ import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder';
 import { CreateGround } from '@babylonjs/core/Meshes/Builders/groundBuilder';
 import { CreateCapsule } from '@babylonjs/core/Meshes/Builders/capsuleBuilder';
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder';
+import { CreateTorus } from '@babylonjs/core/Meshes/Builders/torusBuilder';
+import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
+import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial';
 import { PropType, type EntityRecord } from '../../game/types';
 import type { MapDef, SurfaceKind } from '../../game/maps/types';
 import { raycastWalls, type AABB, type CollisionWorld } from '../../game/physics';
@@ -53,6 +56,20 @@ const TP_WALL_MARGIN = 0.3;
 /** Texture tiling densities (meters per tile). */
 const FLOOR_TILE = 4;
 const WALL_TILE = 3;
+
+/** Noise-ping (visual taunt) tuning. NOTE: callers pass a SCATTERED position
+ * (see render/tauntScatter.ts) — the cue marks a search area, never the hider. */
+const PING_POOL = 6; // concurrent taunts on screen (staggered → rarely all lit)
+const PING_DURATION_MS = 1800;
+const PING_MAX_SCALE = 5; // ring grows from ~0.7 m to ~3.5 m radius
+const PING_BEAM_HEIGHT = 4;
+const PING_COLOR: readonly [number, number, number] = [0.45, 0.9, 1.0]; // "sound" cyan
+
+interface NoisePing {
+  ring: Mesh;
+  beam: Mesh;
+  start: number;
+}
 
 const PLAYER_PALETTE = [
   new Color3(0.9, 0.49, 0.13),
@@ -96,6 +113,8 @@ export class BabylonRenderer implements IRenderer {
   private localNetId = -1;
   private attackFlash: Mesh | null = null;
   private attackFlashUntil = 0;
+  private noisePings: NoisePing[] = [];
+  private nextPing = 0;
   private preset: QualityPreset = 'auto';
   private autoFrames = 0;
   private cameraView: CameraView = 'first';
@@ -182,6 +201,7 @@ export class BabylonRenderer implements IRenderer {
     this.templates = buildPropTemplates(scene, this.mats);
     this.placeStaticProps(map);
     this.buildAttackFlash(scene);
+    this.buildNoisePings(scene);
     this.applyPresetEffects();
   }
 
@@ -250,11 +270,24 @@ export class BabylonRenderer implements IRenderer {
     this.attackFlashUntil = performance.now() + 110;
   }
 
+  pingNoise(x: number, z: number): void {
+    if (this.noisePings.length === 0) return;
+    const ping = this.noisePings[this.nextPing]!;
+    this.nextPing = (this.nextPing + 1) % this.noisePings.length;
+    ping.ring.position.set(x, 0.05, z);
+    ping.beam.position.set(x, PING_BEAM_HEIGHT / 2, z);
+    ping.start = performance.now();
+    ping.ring.setEnabled(true);
+    ping.beam.setEnabled(true);
+  }
+
   render(): void {
     if (!this.engine || !this.scene) return;
+    const now = performance.now();
     if (this.attackFlash) {
-      this.attackFlash.setEnabled(performance.now() < this.attackFlashUntil);
+      this.attackFlash.setEnabled(now < this.attackFlashUntil);
     }
+    this.animateNoisePings(now);
     this.scene.render();
     if (this.preset === 'auto') this.autoTune();
   }
@@ -284,6 +317,8 @@ export class BabylonRenderer implements IRenderer {
     this.shadows = null;
     this.sun = null;
     this.fixtureLights = [];
+    this.noisePings = [];
+    this.nextPing = 0;
     this.avatars.clear();
     this.templates.clear();
   }
@@ -426,15 +461,70 @@ export class BabylonRenderer implements IRenderer {
 
   private buildAttackFlash(scene: Scene): void {
     // A small emissive sphere pinned in front of the camera; toggled on attack.
+    // PBR-unlit for the same reason as the ping material (see buildNoisePings).
     const flash = CreateSphere('attack-flash', { diameter: 0.08, segments: 6 }, scene);
-    const mat = new StandardMaterial('flash-mat', scene);
+    const mat = new PBRMaterial('flash-mat', scene);
+    mat.unlit = true;
     mat.emissiveColor = new Color3(1, 0.85, 0.4);
-    mat.disableLighting = true;
     flash.material = mat;
     flash.parent = this.camera;
     flash.position.set(0.15, -0.12, 0.6);
     flash.setEnabled(false);
     this.attackFlash = flash;
+    mat.forceCompilation(flash); // pre-warm — see buildNoisePings
+  }
+
+  /** Pre-build the noise-ping pool: an expanding ground ring + a tall beam per
+   * slot, reused round-robin so a taunt costs zero allocation. Depth-tested, so
+   * walls occlude the beam (a hider in the next room isn't given away). */
+  private buildNoisePings(scene: Scene): void {
+    // One shared OPAQUE unlit-emissive material. Deliberately PBR: every other
+    // mesh in the scene renders through the PBR pipeline, so its shader variants
+    // are proven under our tree-shaken deep imports. (A StandardMaterial with
+    // disableLighting never reached isReady() in non-themed scenes — no compile
+    // error surfaced, the mesh just silently never drew.) Scale-based animation,
+    // so no alpha blending is ever needed.
+    const mat = new PBRMaterial('ping-mat', scene);
+    mat.unlit = true;
+    mat.emissiveColor = new Color3(PING_COLOR[0], PING_COLOR[1], PING_COLOR[2]);
+
+    for (let i = 0; i < PING_POOL; i++) {
+      // Torus lies flat in XZ (hole axis = Y) → a ground ring. Sized so the
+      // fully-grown ring (~6.6 m radius) covers the whole scatter search area.
+      const ring = CreateTorus(`ping-ring-${i}`, { diameter: 2.2, thickness: 0.24, tessellation: 32 }, scene);
+      ring.material = mat;
+      ring.isPickable = false;
+      ring.setEnabled(false);
+
+      const beam = CreateCylinder(`ping-beam-${i}`, { diameter: 0.5, height: PING_BEAM_HEIGHT, tessellation: 16 }, scene);
+      beam.material = mat;
+      beam.isPickable = false;
+      beam.setEnabled(false);
+
+      this.noisePings.push({ ring, beam, start: 0 });
+    }
+
+    // Pre-warm the shader NOW: this unlit-emissive variant is used by nothing
+    // else in the scene, and lazy compilation can outlive a 1.5 s ping on slow
+    // devices (software GL in e2e) — the cue would silently never draw.
+    mat.forceCompilation(this.noisePings[0]!.ring);
+  }
+
+  private animateNoisePings(now: number): void {
+    for (const p of this.noisePings) {
+      if (!p.ring.isEnabled()) continue;
+      const age = (now - p.start) / PING_DURATION_MS;
+      if (age >= 1) {
+        p.ring.setEnabled(false);
+        p.beam.setEnabled(false);
+        continue;
+      }
+      const fade = 1 - age;
+      const scale = 1 + age * PING_MAX_SCALE;
+      // Ring sweeps outward and thins; beam tapers away — all scale, no alpha.
+      p.ring.scaling.set(scale, 1 * fade + 0.2, scale);
+      p.beam.scaling.set(fade, 1, fade);
+    }
   }
 
   // ── Quality ──────────────────────────────────────────────────────────────

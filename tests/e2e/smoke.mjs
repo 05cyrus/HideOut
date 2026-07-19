@@ -12,7 +12,8 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const PORT = 4199;
-const APP_URL = `http://localhost:${PORT}/`;
+// ?e2e=1 enables harness-only test seams (e.g. window.__pingNoise); no effect in prod.
+const APP_URL = `http://localhost:${PORT}/?e2e=1`;
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url));
 
 function fail(msg) {
@@ -35,7 +36,12 @@ async function waitForServer(url, tries = 50) {
 
 console.log('· starting preview server…');
 // detached → own process group, so we can kill npx AND its vite child together.
-const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
+// HIDEOUT_E2E_DEV=1 serves unbundled sources (vite dev) instead of dist — used
+// to discriminate prod-build (tree-shaking/minify) issues from code issues.
+const serveArgs = process.env.HIDEOUT_E2E_DEV
+  ? ['vite', '--port', String(PORT), '--strictPort']
+  : ['vite', 'preview', '--port', String(PORT), '--strictPort'];
+const preview = spawn('npx', serveArgs, {
   stdio: 'pipe',
   detached: true,
 });
@@ -55,10 +61,13 @@ try {
   });
   console.log('· chrome launched');
   const ctx = await browser.newContext({ viewport: { width: 960, height: 720 } });
+  ctx.setDefaultTimeout(90000); // SwiftShader on a loaded machine needs headroom
 
   const watch = (page, tag) => {
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(`[${tag}] ${msg.text()}`);
+      if (process.env.HIDEOUT_E2E_DEBUG && /\[ping/.test(msg.text()))
+        console.log(`  [${tag}] ${msg.text()}`);
     });
     page.on('pageerror', (err) => consoleErrors.push(`[${tag}] pageerror: ${err.message}`));
   };
@@ -130,9 +139,12 @@ try {
     [host, 'host'],
     [join, 'join'],
   ]) {
+    await page.bringToFront(); // a backgrounded tab stalls Playwright's click actionability
     const btn = page.locator('.view-toggle');
     const before = (await btn.textContent())?.trim();
-    await btn.click();
+    // force: the button sits over a canvas that grabs pointer capture; the default
+    // actionability check can hang waiting for the click to "settle" on it.
+    await btn.click({ force: true });
     await page.waitForTimeout(300);
     const after = (await btn.textContent())?.trim();
     if (before === after) throw new Error(`[${tag}] view toggle did not change (${before})`);
@@ -142,6 +154,34 @@ try {
   await host.screenshot({ path: `${SHOTS}host-3rd.png` });
   await join.screenshot({ path: `${SHOTS}join-3rd.png` });
   console.log('✓ camera toggle → third-person verified & screenshotted on both tabs');
+
+  // ── Noise ping (visual taunt cue): trigger the render seam on a HIDER tab
+  //    (the hunter is blindfolded during Hiding) and screenshot the ring+beam. ──
+  const hostRole = (await host.locator('.badge.role').textContent()) ?? '';
+  const pingPage = hostRole.includes('Hider') ? host : join;
+  await pingPage.bringToFront();
+  const diag = await pingPage.evaluate(async () => {
+    const out = globalThis.__pingNoise?.();
+    if (!out) return null;
+    // Offset re-fires 2 m to the avatar's side: beam reads against the dark
+    // backdrop, ring on open floor (not under the capsule).
+    // Screenshot compositing can lag past a single 1.5 s ping under software GL,
+    // so keep re-firing: some ring is always mid-animation when the shot lands.
+    globalThis.__pingTimer = setInterval(() => globalThis.__pingNoise?.(out.px + 2, out.pz), 400);
+    // Pump rAF frames so the ring is composited even if this tab's loop is
+    // throttled — otherwise the screenshot captures a pre-ping backbuffer.
+    let frames = 0;
+    await new Promise((res) => {
+      const step = () => (++frames >= 3 ? res() : globalThis.requestAnimationFrame(step));
+      globalThis.requestAnimationFrame(step);
+    });
+    return { ...out, frames };
+  });
+  if (!diag) throw new Error('window.__pingNoise seam missing (is ?e2e=1 set?)');
+  console.log(`· ping diag: ${JSON.stringify(diag)}`);
+  await pingPage.screenshot({ path: `${SHOTS}noise-ping.png` });
+  await pingPage.evaluate(() => clearInterval(globalThis.__pingTimer));
+  console.log(`✓ noise-ping cue rendered → ${SHOTS}noise-ping.png`);
 
   // WebGL-fallback warnings are expected in headless; real errors are not.
   const relevant = consoleErrors.filter(

@@ -21,7 +21,7 @@ import { Buttons, GamePhase, PropType } from './types';
 import type { EntityRecord, InputCommand, SimEvent } from './types';
 import type { GameConfig } from './config';
 import type { CollisionWorld } from './physics';
-import { rayCircle, raycastWalls } from './physics';
+import { raycastWalls } from './physics';
 import { stepPlayer } from './movement';
 import { PROP_RADIUS, type MapDef } from './maps/types';
 import { resolveSpeed } from './speed';
@@ -296,15 +296,39 @@ export class HostSimulation {
     );
 
     const t = this.world.getOrThrow(entity, Transform);
-    const dirX = Math.sin(t.yaw);
-    const dirZ = Math.cos(t.yaw);
+    const ox = t.pos.x;
+    const oz = t.pos.z;
+    const aimX = Math.sin(t.yaw);
+    const aimZ = Math.cos(t.yaw);
     const range = this.config.hunter.attackRange;
-    const wallDist = raycastWalls(t.pos.x, t.pos.z, dirX, dirZ, this.collision);
+    // The swing is a thin CONE around the crosshair, not a hairline ray: a target
+    // hits if it's within `aimAssistDegrees` (plus its own radius) of the aim line
+    // AND in clear line of sight. We connect with the MOST on-axis candidate, so a
+    // stray innocent prop off to the side can't steal a swing aimed at a hider.
+    const tanAssist = Math.tan((this.config.hunter.aimAssistDegrees * Math.PI) / 180);
 
-    // Nearest target along the ray: other players (their disguise footprint) and map props.
-    let nearestDist = Math.min(range, wallDist);
-    let victim: Entity | null = null;
-    let hitPropId = -1;
+    // Tracked best across players + props (angular deviation primary, distance tiebreak).
+    const best = { angle: Infinity, dist: Infinity, victim: null as Entity | null, propId: -1 };
+
+    const consider = (cx: number, cz: number, radius: number, who: Entity | null, propId: number) => {
+      const lx = cx - ox;
+      const lz = cz - oz;
+      const tca = lx * aimX + lz * aimZ; // forward projection along the aim line
+      if (tca <= 0) return; // behind the hunter
+      const L = Math.hypot(lx, lz);
+      if (L - radius > range) return; // nearest surface beyond reach
+      const perp = Math.abs(aimX * lz - aimZ * lx); // lateral offset from the aim line
+      if (perp > radius + tanAssist * tca) return; // outside the swing cone
+      // Line of sight: a wall in front of the target's near surface blocks the hit.
+      if (raycastWalls(ox, oz, lx / L, lz / L, this.collision) < L - radius) return;
+      const angle = L <= radius ? 0 : perp / L; // ~sin(off-axis angle); smaller = more centered
+      if (angle < best.angle - 1e-6 || (angle <= best.angle + 1e-6 && tca < best.dist)) {
+        best.angle = angle;
+        best.dist = tca;
+        best.victim = who;
+        best.propId = propId;
+      }
+    };
 
     for (const other of this.players()) {
       if (other === entity) continue;
@@ -314,22 +338,15 @@ export class HostSimulation {
       const od = this.world.getOrThrow(other, Disguise);
       const radius =
         od.propType === PropType.None ? this.config.player.radius : PROP_RADIUS[od.propType];
-      const dist = rayCircle(t.pos.x, t.pos.z, dirX, dirZ, ot.pos.x, ot.pos.z, radius);
-      if (dist !== null && dist < nearestDist) {
-        nearestDist = dist;
-        victim = other;
-        hitPropId = -1;
-      }
+      consider(ot.pos.x, ot.pos.z, radius, other, -1);
     }
 
     for (const prop of this.map.props) {
-      const dist = rayCircle(t.pos.x, t.pos.z, dirX, dirZ, prop.x, prop.z, PROP_RADIUS[prop.type]);
-      if (dist !== null && dist < nearestDist) {
-        nearestDist = dist;
-        victim = null;
-        hitPropId = prop.id;
-      }
+      consider(prop.x, prop.z, PROP_RADIUS[prop.type], null, prop.id);
     }
+
+    const victim = best.victim;
+    const hitPropId = best.propId;
 
     if (victim !== null) {
       const vp = this.world.getOrThrow(victim, Player);

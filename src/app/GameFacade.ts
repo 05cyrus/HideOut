@@ -26,6 +26,7 @@ import { InputManager } from '../input/InputManager';
 import { AudioManager } from '../audio/AudioManager';
 import { SaveManager } from '../save/SaveManager';
 import type { CameraView, IRenderer } from '../render/IRenderer';
+import { scatterTauntPing } from '../render/tauntScatter';
 import { app } from './state.svelte';
 
 const IDLE_TICK_MS = 1000 / defaultConfig.tickRate;
@@ -161,6 +162,23 @@ export class GameFacade {
     this.input.onViewToggle = () => this.toggleCameraView();
     this.input.attach(container);
     window.addEventListener('resize', this.resizeHandler);
+
+    // Test seam (e2e only): draw a noise ping at the local player's feet so the
+    // renderer's taunt cue can be captured deterministically, without depending on
+    // hunt-phase timing or background-tab throttling. Guarded by ?e2e=1 → absent
+    // in production. Purely local & cosmetic (no network event, reveals nobody).
+    if (typeof location !== 'undefined' && location.search.includes('e2e=1')) {
+      (window as unknown as { __pingNoise?: (x?: number, z?: number) => unknown }).__pingNoise = (
+        x?: number,
+        z?: number,
+      ) => {
+        const s = this.session?.localState();
+        const px = typeof x === 'number' ? x : (s?.record.x ?? 0);
+        const pz = typeof z === 'number' ? z : (s?.record.z ?? 0);
+        this.renderer?.pingNoise(px, pz);
+        return { px, pz, hasSession: !!s, hasRenderer: !!this.renderer };
+      };
+    }
 
     this.fixed.reset();
     this.lastFrameTime = performance.now();
@@ -328,9 +346,21 @@ export class GameFacade {
       case 'lockChanged':
         if (event.netId === me) this.audio.play('lock');
         break;
-      case 'taunt':
+      case 'taunt': {
         this.audio.play('taunt', { x: event.x, z: event.z, listener: listener() });
+        // Visual twin of the taunt sound so hunters can locate hiders with audio
+        // off. Deliberately IMPRECISE: the cue is scattered a few meters off the
+        // hider (deterministic per peer), marking a search area — a pinpoint
+        // beacon would delete the guessing game (playtest feedback).
+        const scattered = scatterTauntPing(
+          event.netId,
+          event.x,
+          event.z,
+          maps[session.mapId]?.bounds,
+        );
+        this.renderer?.pingNoise(scattered.x, scattered.z);
         break;
+      }
       case 'roundEnd': {
         const local = session.localState();
         const won =

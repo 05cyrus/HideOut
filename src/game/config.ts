@@ -21,6 +21,14 @@ export interface GameConfig {
     wrongPropDamage: number;
     attackRange: number;
     attackCooldownSeconds: number;
+    /**
+     * Attack aim-assist: half-angle (degrees) of the swing cone. The attack is
+     * NOT a hairline ray — a target counts as hit if it lies within this angular
+     * tolerance of the crosshair (plus its own radius) with clear line of sight.
+     * 0 restores the old single-ray behavior. Forgives the sub-degree aim that
+     * made hunters miss hiders standing right in front of them.
+     */
+    aimAssistDegrees: number;
   };
   props: {
     /** Max distance to a prop to possess it (m). */
@@ -65,6 +73,7 @@ export const defaultConfig: GameConfig = {
     wrongPropDamage: 12,
     attackRange: 6,
     attackCooldownSeconds: 0.8,
+    aimAssistDegrees: 7,
   },
   props: {
     possessRange: 2.5,

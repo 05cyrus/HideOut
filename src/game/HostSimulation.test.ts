@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { HostSimulation } from './HostSimulation';
 import { GamePhase, PropType, Buttons } from './types';
 import type { InputCommand, SimEvent } from './types';
-import { withConfig } from './config';
+import { withConfig, type GameConfig } from './config';
+import { aabb } from './physics';
+import type { MapDef } from './maps/types';
 import { testBoxMap as testMap, testBoxConfig as cfg } from './maps/testbox';
 
 /** Per-player sequence bookkeeping + convenience input drivers. */
@@ -266,6 +268,38 @@ describe('HostSimulation — combat', () => {
     toPhase(s, GamePhase.Hunting);
     const events = s.d.press(s.hiderB, Buttons.Attack, { yaw: Math.PI / 2 });
     expect(events.some((e) => e.type === 'attack')).toBe(false);
+  });
+
+  it('aim assist: a hider just off the crosshair still connects (top miss complaint)', () => {
+    // Open room, hider 5 m ahead but ~0.55 m off the aim line (≈6°): inside the
+    // 7° swing cone → hit; with assist disabled it is a hairline ray → whiffs.
+    const aimMap: MapDef = {
+      id: 'aim',
+      name: 'Aim',
+      bounds: aabb(-20, -20, 20, 20),
+      wallHeight: 3,
+      colliders: [],
+      props: [],
+      hunterSpawn: { x: 0, z: 0, yaw: 0 },
+      hiderSpawns: [
+        { x: 0.55, z: 5, yaw: 0 },
+        { x: -9, z: 9, yaw: 0 },
+      ],
+    };
+    const connects = (aimAssistDegrees: number): boolean => {
+      const c: GameConfig = { ...cfg, hunter: { ...cfg.hunter, aimAssistDegrees } };
+      const sim = new HostSimulation(aimMap, c, 1);
+      sim.addPlayer(0, 'H');
+      sim.addPlayer(1, 'D');
+      expect(sim.startRound()).toBe(true);
+      const d = new Driver(sim);
+      for (let i = 0; i < 200 && sim.phase !== GamePhase.Hunting; i++) sim.step();
+      expect(sim.phase).toBe(GamePhase.Hunting);
+      const hunterId = sim.records().find((r) => r.role === 'hunter')!.netId;
+      return d.press(hunterId, Buttons.Attack, { yaw: 0 }).some((e) => e.type === 'eliminated');
+    };
+    expect(connects(7)).toBe(true); // swing cone forgives the small aim error
+    expect(connects(0)).toBe(false); // old single-ray behavior misses
   });
 });
 
